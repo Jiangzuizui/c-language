@@ -1,4 +1,4 @@
-//#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -15,18 +15,32 @@ typedef struct PersonInfo {
 	char phone[1024];
 }PersonInfo;
 
-#define	MAX_PERSONINFO_SIZE 200
+//#define	MAX_PERSONINFO_SIZE 200
 
 typedef struct AddressBook {
-	PersonInfo persons[MAX_PERSONINFO_SIZE];
+	//指针形式 通过动态内存管理的方式
+	PersonInfo* persons;
 	//size表示persons数组中实际有效的元素个数
 	//[0,size)有效
 	int size;
+	//capacity表示persons对应的空间的最大容量
+	int capacity;
 }AddressBook;
 
+extern void save(AddressBook* addressbook);
+extern void load(AddressBook* addressbook);
+
+
 void init(AddressBook* addressbook) {
-	memset(addressbook->persons, 0, sizeof(addressbook->persons));
+	/*memset(addressbook->persons, 0, sizeof(addressbook->persons));
+	addressbook->size = 0;*/
+	//显式申请内存空间
 	addressbook->size = 0;
+	addressbook->capacity = 200;
+	addressbook->persons = (PersonInfo*)malloc
+	(addressbook->capacity * sizeof(PersonInfo));
+	//如果不对malloc初始化 在vs debug模式下会填充成屯屯屯
+	//memset(addressbook->persons, 0, sizeof(PersonInfo) * addressbook->capacity);
 }
 
 int menu() {
@@ -59,17 +73,38 @@ void showPersonInfo(AddressBook* addressbook) {
 
 void addPersonInfo(AddressBook* addressbook) {
 	printf("新增联系人...\n\n");
-	//把新增的联系人信息,放到下标size位置上
-	if (addressbook->size >= MAX_PERSONINFO_SIZE) {
-		printf("新增失败,联系人已满\n");
-		return;
+
+	if (addressbook->size >= addressbook->capacity) {
+		//printf("新增失败,联系人已满\n");
+		//进行扩容
+		addressbook->capacity += 100;
+		//重新申请内存空间
+		//直接使用relloc比较简单方便
+		/*addressbook->persons = realloc(addressbook->persons,
+			addressbook->capacity * sizeof(PersonInfo));*/
+		
+		//也可以用malloc手动模拟realloc 的过程
+		PersonInfo* old = addressbook->persons;
+		addressbook->persons = (PersonInfo*)malloc(
+			addressbook->capacity * sizeof(PersonInfo));
+		//把旧的内存空间的数据拷贝到新的空间上
+		memcpy(addressbook->persons, old,
+			sizeof(PersonInfo) * addressbook->size);
+		//释放旧的空间
+		free(old);
+		
 	}
-	PersonInfo* p = &addressbook->persons[addressbook->size];
+	//把新增的联系人信息,放到下标size位置上
+	PersonInfo*  p = &addressbook->persons[addressbook->size];
 	printf("请输入新联系人的姓名: \n");
 	scanf("%s", p->name);
 	printf("请输入新联系人电话: \n");
 	scanf("%s",p->phone);
 	addressbook->size++;
+
+	//保存数据到磁盘
+	save(addressbook);
+
 	printf("新增联系人成功!\n\n");
 }
 
@@ -110,8 +145,12 @@ void deletePersonInfo(AddressBook* addressbook) {
 		printf("\n删除成功\n\n");
 		return;
 	}
-	addressbook->persons[id] = addressbook->persons[addressbook->size - 1];
+	//删除中间元素 把最后的元素拷贝过去再删最后一个
+	addressbook->persons[id] = 
+		addressbook->persons[addressbook->size - 1];
 	addressbook->size--;
+
+	save(addressbook);
 	printf("\n删除成功\n\n");
 }
 
@@ -131,6 +170,7 @@ void updatePersonInfo(AddressBook* addressbook) {
 	char name[1024] = { 0 };
 	scanf("%s", name);
 	if (strcmp(name, "*") != 0) {
+		//用户输入的不是*
 		strcpy(p->name, name);
 	}
 	printf("请输入新的联系人电话");
@@ -140,6 +180,7 @@ void updatePersonInfo(AddressBook* addressbook) {
 		strcpy(p->phone, phone);
 	}
 
+	save(addressbook);
 	printf("\n修改联系人完成\n\n");
 }
 
@@ -150,12 +191,72 @@ void updatePersonInfo(AddressBook* addressbook) {
 
 typedef void(*Func)(AddressBook*);
 
+//创建一组函数 保存到文件以及从文件中加载数据
+
+void save(AddressBook* addressbook) {
+	//把通讯录中的内容保存到文件中
+	//1.打开文件
+	FILE* f=fopen("d:/AddressBook.txt", "w");
+	if (f == NULL) {
+		perror("文件打开失败");
+		return;
+	}
+	//2.写入内容
+	/*for (int i = 0; i < addressbook->size; i++) {
+		PersonInfo* p = &addressbook->persons[i];
+		fwrite(p, sizeof(PersonInfo), 1, f);
+	}*/
+	fwrite(addressbook->persons,
+		sizeof(PersonInfo), addressbook->size, f);
+	//3.关闭文件
+	fclose(f);
+
+}
+
+void load(AddressBook* addressbook) {
+	//从文件中加载通讯录的内容
+	//1.打开文件
+	FILE* f = fopen("d:/AddressBook.txt", "r");
+	if (f == NULL) {
+		printf("当前文件尚未创建!\n");
+		return;
+	}
+	//2.读取数据,最好用循环,随时进行扩容
+	while (1) {
+		PersonInfo personInfo = { 0 };
+		size_t len = fread(&personInfo, sizeof(PersonInfo), 1, f);
+		if (len == 0) {
+			printf("读取完毕\n");
+			break;
+		}
+		//把personInfo这个变量加到结构体里面去
+		if (addressbook->size >= addressbook->capacity) {
+			//先扩容,与上面类似
+			PersonInfo* old = addressbook->persons;
+			addressbook->capacity += 100;
+			addressbook->persons = (PersonInfo*)malloc
+			(addressbook->capacity * sizeof(PersonInfo));
+			memcpy(addressbook->persons, old, addressbook->size * sizeof(PersonInfo));
+			free(old);
+
+		}
+		//赋值数据
+		addressbook->persons[addressbook->size] = personInfo;
+		addressbook->size++;
+	}
+	fclose(f);
+}
+
 AddressBook addressbook;
 
 int main() {
 	//先在mian函数中创建这个结构体变量
 	//针对这个结构体变量进行初始化
 	init(&addressbook);
+
+	//加上一个从文件加载数据的逻辑
+	load(&addressbook);
+
 	//创建一个函数指针数组
 	Func arr[]={
 		NULL,
